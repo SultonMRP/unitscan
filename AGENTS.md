@@ -22,14 +22,14 @@ A name is ignored for 30 minutes (`DEAD_IGNORE_SECONDS`) when:
 
 Ignore storage is the saved variable `unitscan_dead`: uppercase name to server time (`GetServerTime`, else `time()`). Do not refresh the timestamp while the name is already stored. A 1-second ticker and login both drop expired entries. Expiry prints `NAME tracking now enabled`. Adding a name prints `dead NAME added to ignore` and closes the popup when that popup is the same name.
 
-`/unitscan reset` clears `unitscan_dead` and the in-memory dead state (`known_state`, `recent_deaths`, `found`) so those rares scan again immediately.
+`/unitscan clear` clears `unitscan_dead` and the in-memory dead state (`known_state`, `recent_deaths`, `found`) so those rares scan again immediately.
 
 The skull button `unitscan_dead` matches the close button: 32×32, scale 0.8, `BOTTOMLEFT` offset `-5, -5`, hit insets 8. The icon is `Interface\TargetingFrame\UI-RaidTargetingIcon_8`, inset 7px so it matches the X.
 
 ## Two different ignore lists
 
-- `unitscan_dead` — 30-minute corpse ignore. Skull, dead target, kill, `/unitscan reset`.
-- `unitscan_ignored` — permanent skip of a rare in the zone list. `/unitscan ignore Name` toggles one name. Reset does not touch this.
+- `unitscan_dead` — 30-minute corpse ignore. Skull, dead target, kill, `/unitscan clear`.
+- `unitscan_ignored` — permanent skip (GUI Enable/Disable, red name). `/unitscan clear` does not touch this.
 
 ## Saved variables
 
@@ -48,4 +48,4 @@ File-scope `unitscan_dead = unitscan_dead or {}` is the default. Saved variables
 
 ## Commands
 
-`/unitscan` help, target, name, nearby, ignore, interval, reset. A bare `/unitscan Something` toggles a custom scan name.
+`/unitscan` toggles the GUI (User List + Stock List). `/unitscan clear` clears the 30-minute dead ignore. Custom names are added/removed in the User List. Stock rares are Enable/Disable only (red when disabled).

@@ -459,11 +459,14 @@ function unitscanLC:FriendCheck(name)
 		elseif event == 'ADDON_ACTION_FORBIDDEN' and arg1 == 'unitscan' then
 			forbidden = true
 		elseif event == 'PLAYER_TARGET_CHANGED' then
-			if UnitName'target' and strupper(UnitName'target') == unitscan.button:GetText() and not GetRaidTargetIndex'target' and (not UnitInRaid'player' or IsRaidOfficer() or IsRaidLeader()) then
+			if unitscan.button and UnitName'target' and strupper(UnitName'target') == unitscan.button:GetText() and not GetRaidTargetIndex'target' and (not UnitInRaid'player' or IsRaidOfficer() or IsRaidLeader()) then
 				SetRaidTarget('target', 2)
 			end
 			if unitscan.ignore_dead_target then
 				unitscan.ignore_dead_target()
+			end
+			if unitscan.update_gui_buttons then
+				unitscan.update_gui_buttons()
 			end
 		elseif event == 'UNIT_HEALTH' and arg1 == 'target' then
 			if unitscan.ignore_dead_target then
@@ -2966,7 +2969,9 @@ do
 		if GetTime() - unitscan.last_check >= unitscan_defaults.CHECK_INTERVAL then
 			unitscan.last_check = GetTime()
 			for name in pairs(unitscan_targets) do
-				unitscan.target(name)
+				if not unitscan_ignored[name] then
+					unitscan.target(name)
+				end
 			end
 			for _, name in pairs(nearby_targets) do
 				unitscan.target(name)
@@ -3019,181 +3024,421 @@ function unitscan.toggle_target(name)
 	if unitscan_targets[key] then
 		unitscan_targets[key] = nil
 		found[key] = nil
+		if not rare_spawns[key] then
+			unitscan_ignored[key] = nil
+		end
 		unitscan.print('- ' .. key)
 	elseif key ~= '' then
 		unitscan_targets[key] = true
 		unitscan.print('+ ' .. key)
 	end
+	if unitscan.refresh_gui then
+		unitscan.refresh_gui()
+	end
 end
 
 
 --------------------------------------------------------------------------------
--- Slash Commands /unitscan
+-- GUI: user list (custom names) and stock list (built-in rares)
 --------------------------------------------------------------------------------
 
-	
-SlashCmdList["UNITSCAN"] = function(parameter)
-	local _, _, command, args = string.find(parameter, '^(%S+)%s*(.*)$')
-	
-	--===== Slash to put current player target to the unit scanning list. =====--	
-	if command == "target" then
-		local targetName = UnitName("target")
-		if targetName then
-			local key = strupper(targetName)
-			if not unitscan_targets[key] then
-				unitscan_targets[key] = true
-				unitscan.print("+ " .. key)
-			else
-				unitscan_targets[key] = nil
-				unitscan.print("- " .. key)
-				found[key] = nil
-			end
-		else
-			unitscan.print("No target selected.")
-		end
+local GUI_ROWS = 16
+local GUI_ROW_HEIGHT = 18
+local COLOR_ENABLED = {1, 0.82, 0}
+local COLOR_DISABLED = {1, 0.15, 0.15}
 
-	--===== Slash to change unit scanning interval. Default is 0.3 =====--	
-	elseif command == "interval" then
-		local newInterval = tonumber(args)
-		if newInterval then
-			unitscan_defaults.CHECK_INTERVAL = newInterval
-			unitscan.print("Check interval set to " .. newInterval)
-		else
-			unitscan.print("Invalid interval value. Usage: /unitscan interval <number>")
-		end
+local function trim_name(text)
+	if not text then return "" end
+	return (string.gsub(text, "^%s*(.-)%s*$", "%1"))
+end
 
-	--===== Slash Ignore Rare =====--	
-	elseif command == "ignore" then
-		if args == "" then
-			-- print list of ignored NPCs
-			if next(unitscan_ignored) == nil then
-				print(" ")
-			unitscan.ignoreprint("list is empty.")
-			else
-			print("|cffff0000" .. " Ignore list " .. "|r"  .. "currently contains:")
-			for rare in pairs(unitscan_ignored) do
-				unitscan.ignoreprint(rare)
-			end
-		end
+function unitscan.sorted_stock()
+	local sorted = {}
+	for key in pairs(rare_spawns) do
+		tinsert(sorted, key)
+	end
+	sort(sorted, function(a, b) return a < b end)
+	return sorted
+end
 
-			return
-		else
-	        local rare = string.upper(args)
-	        if rare_spawns[rare] == nil then
-	            -- rare does not exist in rare_spawns table
-	            unitscan.print("|cffffff00" .. args .. "|r" .. " is not a valid rare spawn.")
-
-	            return
-	    end
-
-		if unitscan_ignored[rare] then
-			-- remove rare from ignore list
-			unitscan_ignored[rare] = nil
-			unitscan.ignoreprint("- " .. rare)
-			unitscan.refresh_nearby_targets()
-			found[rare] = nil
-		else
-			-- add rare to ignore list
-			unitscan_ignored[rare] = true
-			unitscan.ignoreprint("+ " .. rare)
-			unitscan.refresh_nearby_targets()
-		end
-
-		return
-		end
-
-	--===== Slash to clear the 30-minute dead ignore list =====--
-	elseif command == "reset" then
-		local count = 0
-		if unitscan_dead then
-			for name in pairs(unitscan_dead) do
-				count = count + 1
-				unitscan_dead[name] = nil
-				known_state[name] = nil
-				recent_deaths[name] = nil
-				found[name] = nil
-			end
-		end
-		if count == 0 then
-			unitscan.print("ignore list is empty.")
-		else
-			unitscan.print("ignore list cleared (" .. count .. ").")
-		end
-
-	--===== Slash to avoid people confusion if they do /unitscan name =====--	
-	elseif command == "name" then
-		print(" ")
-		unitscan.print("replace |cffffff00'name'|r with npc you want to scan.")
-		print(" - for example: |cFF00FF00/unitscan|r |cffffff00Hogger|r")
-
-	--===== Slash to only print currently tracked non-rare targets. =====--	
-	elseif command == "targets" then
-		if unitscan_targets then
-			for k, v in pairs(unitscan_targets) do
-				unitscan.print(tostring(k))
-			end
-		end
-
-	--===== Slash to show rare spawns that are currently being scanned. =====--	
-	elseif command == "nearby" then
-		print(" ")
-		unitscan.print("Is someone missing?")
-						print(" - Add it to your list with |cFF00FF00/unitscan|r |cffffff00name|r")
-				unitscan.print("|cffff0000ignore|r")
-				print(" - Adds/removes the rare mob 'name' from the unit scanner |cffff0000ignore list.|r")
-				print(" ")
-		for key,val in pairs(nearby_targets) do
-			if not (val == "Lumbering Horror" or val == "Spirit of the Damned" or val == "Bone Witch") then
-				unitscan.print(val)
-			end
-		end
-
-	--===== Slash to show all avaliable commands =====--	
-	elseif command == 'help' then
-
-		print(" ")
-		print("|cfff0d440Available commands:|r")
-
-		unitscan.print("target")
-		print(" - Adds/removes the name of your |cffffff00current target|r to the scanner.")
-		-- print(" ")
-		unitscan.print("name")
-		print(" - Adds/removes the |cffffff00mob/player 'name'|r from the unit scanner.")
-		-- print(" ")
-		unitscan.print("nearby")
-		print(" - List of |cffffff00rare mob names|r that are being scanned in your current zone.")
-		unitscan.print("|cffff0000ignore|r")
-		print(" - Adds/removes the rare mob 'name' from the permanent |cffff0000ignore list.|r")
-		unitscan.print("reset")
-		print(" - Clears the 30-minute |cffff0000dead ignore|r list so those rares are tracked again.")
-		print(" ")
-		print("|cfff0d440Dead rares:|r")
-		print(" - Skull on the popup ignores that rare for |cffffff0030 min|r and closes it.")
-		print(" - Targeting a dead rare, or killing the one you have targeted, does the same.")
-		print(" - Chat: |cffffff00dead NAME added to ignore|r, then |cffffff00NAME tracking now enabled|r.")
-
-
-	--===== Slash without any arguments (/untiscan) prints currently tracked user-defined units and some basic available slash commands  =====--
-	--===== If an agrugment after /unitscan is given, it will add a unit to the scanning targets. =====--
-	elseif not command then
-		print(" ")
-		unitscan.print("|cffffff00help|r")
-		print(" - Displays available unitscan |cffffff00commands|r")
-		print(" ")
-		if unitscan_targets then
-			if next(unitscan_targets) == nil then
-				unitscan.print("Unit Scanner is currently empty.")
-			else
-				print(" |cffffff00Unit Scanner|r currently contains:")
-				for k, v in pairs(unitscan_targets) do
-					unitscan.print(tostring(k))
-				end
-			end
-		end
+function unitscan.toggle_ignored(name)
+	local key = strupper(name or "")
+	if key == "" then return end
+	if unitscan_ignored[key] then
+		unitscan_ignored[key] = nil
+		unitscan.print(key .. " enabled")
 	else
-		unitscan.toggle_target(parameter)
+		unitscan_ignored[key] = true
+		found[key] = nil
+		unitscan.print(key .. " disabled")
+	end
+	unitscan.refresh_nearby_targets()
+	if unitscan.refresh_gui then
+		unitscan.refresh_gui()
+	end
+end
+
+local function paint_list_button(btn, name, selected)
+	btn.name = name
+	if not name then
+		btn:SetText("")
+		btn:Hide()
+		return
+	end
+	btn:SetText(name)
+	btn:Show()
+	local fs = btn:GetFontString()
+	if unitscan_ignored[name] then
+		fs:SetTextColor(unpack(COLOR_DISABLED))
+	else
+		fs:SetTextColor(unpack(COLOR_ENABLED))
+	end
+	if selected == name then
+		btn:LockHighlight()
+	else
+		btn:UnlockHighlight()
+	end
+end
+
+local function set_gui_button(btn, enabled)
+	if not btn then return end
+	if enabled then
+		btn:Enable()
+	else
+		btn:Disable()
+	end
+end
+
+local function guid_is_player_pet_or_vehicle(guid)
+	if not guid then return false end
+	if strfind(guid, "^Player") or strfind(guid, "^Pet") or strfind(guid, "^Vehicle") then
+		return true
+	end
+	if strsub(guid, 1, 2) == "0x" then
+		local unit_type = tonumber(strsub(guid, 5, 5), 16)
+		-- 3.3.5 packed GUID: 0 player, 4 pet, 5 vehicle
+		if unit_type == 0 or unit_type == 4 or unit_type == 5 then
+			return true
+		end
+	end
+	return false
+end
+
+function unitscan.addable_target_name()
+	if not UnitExists("target") then return nil end
+	if UnitIsPlayer("target") then return nil end
+	if UnitIsUnit("target", "pet") then return nil end
+	if UnitIsOtherPlayersPet and UnitIsOtherPlayersPet("target") then return nil end
+	if guid_is_player_pet_or_vehicle(UnitGUID("target")) then return nil end
+	local creature_type = UnitCreatureType("target")
+	if creature_type == "Non-combat Pet" or creature_type == "Companion" or creature_type == "Totem" then
+		return nil
+	end
+	local name = UnitName("target")
+	if not name or name == "" then return nil end
+	if UNKNOWNOBJECT and name == UNKNOWNOBJECT then return nil end
+	return strupper(name)
+end
+
+function unitscan.name_already_listed(name)
+	if not name or name == "" then return false end
+	local key = strupper(name)
+	return (unitscan_targets and unitscan_targets[key]) or (rare_spawns and rare_spawns[key])
+end
+
+function unitscan.update_gui_buttons()
+	local frame = unitscan.gui
+	if not frame then return end
+	local typed = frame.user_edit and strupper(trim_name(frame.user_edit:GetText())) or ""
+	local target_name = unitscan.addable_target_name()
+	local can_add_typed = typed ~= "" and not unitscan.name_already_listed(typed)
+	local can_add_target = target_name and not unitscan.name_already_listed(target_name)
+	set_gui_button(frame.toggle, frame.sel ~= nil)
+	set_gui_button(frame.remove, frame.sel and unitscan_targets[frame.sel])
+	set_gui_button(frame.add, can_add_typed or can_add_target)
+end
+
+StaticPopupDialogs["UNITSCAN_CONFIRM_REMOVE"] = {
+	text = "Remove %s from the User List?",
+	button1 = YES,
+	button2 = NO,
+	OnAccept = function(dialog, data)
+		local name = data or (dialog and dialog.data) or (this and this.data)
+		if not name or not unitscan_targets[name] then return end
+		if unitscan.gui and unitscan.gui.sel == name then
+			unitscan.gui.sel = nil
+		end
+		unitscan.toggle_target(name)
+	end,
+	timeout = 0,
+	whileDead = 1,
+	hideOnEscape = 1,
+}
+
+local function make_list_button(parent, on_click)
+	local b = CreateFrame("Button", nil, parent)
+	b:SetHeight(GUI_ROW_HEIGHT)
+	b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+	local fs = b:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+	fs:SetPoint("LEFT", 4, 0)
+	fs:SetPoint("RIGHT", -4, 0)
+	fs:SetJustifyH("LEFT")
+	b:SetFontString(fs)
+	b:SetScript("OnClick", function(self)
+		if self.name then
+			on_click(self.name)
+			unitscan.refresh_gui()
+		end
+	end)
+	return b
+end
+
+function unitscan.create_gui()
+	if unitscan.gui then return unitscan.gui end
+
+	local frame = CreateFrame("Frame", "unitscanGUI", UIParent)
+	unitscan.gui = frame
+	frame:SetWidth(590)
+	frame:SetHeight(430)
+	frame:SetPoint("CENTER")
+	frame:SetFrameStrata("DIALOG")
+	frame:SetToplevel(true)
+	frame:SetMovable(true)
+	frame:EnableMouse(true)
+	frame:SetClampedToScreen(true)
+	frame:RegisterForDrag("LeftButton")
+	frame:SetScript("OnDragStart", frame.StartMoving)
+	frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+	frame:SetBackdrop({
+		bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+		edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+		tile = true,
+		tileSize = 32,
+		edgeSize = 32,
+		insets = { left = 11, right = 12, top = 12, bottom = 11 },
+	})
+	tinsert(UISpecialFrames, "unitscanGUI")
+	frame:Hide()
+
+	local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+	title:SetPoint("TOP", 0, -16)
+	title:SetText("unitscan")
+
+	local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+	close:SetPoint("TOPRIGHT", -4, -4)
+
+	frame.sel = nil
+	frame.user_buttons = {}
+	frame.stock_buttons = {}
+
+	local function make_column(side)
+		local panel = CreateFrame("Frame", nil, frame)
+		panel:SetWidth(260)
+		panel:SetHeight(340)
+		if side == "left" then
+			panel:SetPoint("TOPLEFT", 20, -42)
+		else
+			panel:SetPoint("TOPRIGHT", -30, -42)
+		end
+
+		local heading = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+		heading:SetPoint("TOP", 0, 0)
+		heading:SetText(side == "left" and "User List" or "Stock List")
+
+		local list = CreateFrame("Frame", nil, panel)
+		list:SetPoint("TOPLEFT", 0, -18)
+		list:SetPoint("TOPRIGHT", 0, -18)
+		list:SetHeight(GUI_ROWS * GUI_ROW_HEIGHT + 12)
+		list:SetBackdrop({
+			bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+			edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+			tile = true,
+			tileSize = 16,
+			edgeSize = 16,
+			insets = { left = 4, right = 4, top = 4, bottom = 4 },
+		})
+		list:SetBackdropColor(0, 0, 0, 0.85)
+
+		local scroll_name = side == "left" and "unitscanUserScroll" or "unitscanStockScroll"
+		local scroll = CreateFrame("ScrollFrame", scroll_name, list, "FauxScrollFrameTemplate")
+		scroll:SetPoint("TOPRIGHT", list, -6, -8)
+		scroll:SetPoint("BOTTOMRIGHT", list, -6, 8)
+		scroll:SetWidth(22)
+		list:EnableMouseWheel(true)
+		list:SetScript("OnMouseWheel", function(_, delta)
+			local scrollbar = _G[scroll:GetName() .. "ScrollBar"]
+			if scrollbar then
+				scrollbar:SetValue(scrollbar:GetValue() - delta * GUI_ROW_HEIGHT)
+			end
+		end)
+
+		local buttons = side == "left" and frame.user_buttons or frame.stock_buttons
+		local function select_name(name)
+			frame.sel = name
+		end
+		for i = 1, GUI_ROWS do
+			local b = make_list_button(list, select_name)
+			b:SetFrameLevel(list:GetFrameLevel() + 2)
+			if i == 1 then
+				b:SetPoint("TOPLEFT", list, 8, -6)
+			else
+				b:SetPoint("TOPLEFT", buttons[i - 1], "BOTTOMLEFT", 0, 0)
+			end
+			b:SetPoint("RIGHT", list, -28, 0)
+			buttons[i] = b
+		end
+
+		return list, scroll
+	end
+
+	local user_list, user_scroll = make_column("left")
+	local _, stock_scroll = make_column("right")
+	frame.user_scroll = user_scroll
+	frame.stock_scroll = stock_scroll
+
+	local bar = CreateFrame("Frame", nil, frame)
+	bar:SetPoint("TOPLEFT", user_list, "BOTTOMLEFT", 0, -10)
+	bar:SetPoint("TOPRIGHT", frame, -30, 0)
+	bar:SetHeight(22)
+
+	local edit = CreateFrame("EditBox", "unitscanUserEdit", bar, "InputBoxTemplate")
+	edit:SetWidth(180)
+	edit:SetHeight(20)
+	edit:SetAutoFocus(false)
+	edit:SetMaxLetters(60)
+	edit:SetPoint("LEFT", 6, 0)
+	edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+	frame.user_edit = edit
+
+	local add = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
+	add:SetWidth(50)
+	add:SetHeight(22)
+	add:SetText("Add")
+	add:SetPoint("LEFT", edit, "RIGHT", 6, 0)
+	add:Disable()
+	frame.add = add
+
+	local remove = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
+	remove:SetWidth(80)
+	remove:SetHeight(22)
+	remove:SetText("Remove")
+	remove:SetPoint("LEFT", add, "RIGHT", 6, 0)
+	remove:Disable()
+	frame.remove = remove
+	remove:SetScript("OnClick", function()
+		if not frame.sel or not unitscan_targets[frame.sel] then
+			return
+		end
+		local dialog = StaticPopup_Show("UNITSCAN_CONFIRM_REMOVE", frame.sel)
+		if dialog then
+			dialog.data = frame.sel
+		end
+	end)
+
+	local toggle = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
+	toggle:SetWidth(120)
+	toggle:SetHeight(22)
+	toggle:SetText("Enable/Disable")
+	toggle:SetPoint("LEFT", remove, "RIGHT", 6, 0)
+	toggle:Disable()
+	frame.toggle = toggle
+	toggle:SetScript("OnClick", function()
+		if not frame.sel then return end
+		unitscan.toggle_ignored(frame.sel)
+	end)
+
+	local function add_from_edit()
+		local name = strupper(trim_name(edit:GetText()))
+		if name == "" then
+			name = unitscan.addable_target_name() or ""
+		end
+		if name == "" or unitscan.name_already_listed(name) then return end
+		unitscan_targets[name] = true
+		unitscan.print("+ " .. name)
+		frame.sel = name
+		edit:SetText("")
+		edit:ClearFocus()
+		unitscan.refresh_gui()
+	end
+	add:SetScript("OnClick", add_from_edit)
+	edit:SetScript("OnEnterPressed", add_from_edit)
+	edit:SetScript("OnTextChanged", function()
+		unitscan.update_gui_buttons()
+	end)
+
+	function unitscan.refresh_gui()
+		if not frame:IsShown() then return end
+		local user_names = unitscan.sorted_targets()
+		FauxScrollFrame_Update(user_scroll, #user_names, GUI_ROWS, GUI_ROW_HEIGHT)
+		local user_off = FauxScrollFrame_GetOffset(user_scroll)
+		for i = 1, GUI_ROWS do
+			paint_list_button(frame.user_buttons[i], user_names[user_off + i], frame.sel)
+		end
+
+		local stock_names = unitscan.sorted_stock()
+		FauxScrollFrame_Update(stock_scroll, #stock_names, GUI_ROWS, GUI_ROW_HEIGHT)
+		local stock_off = FauxScrollFrame_GetOffset(stock_scroll)
+		for i = 1, GUI_ROWS do
+			paint_list_button(frame.stock_buttons[i], stock_names[stock_off + i], frame.sel)
+		end
+		unitscan.update_gui_buttons()
+	end
+
+	user_scroll:SetScript("OnVerticalScroll", function(self, offset)
+		FauxScrollFrame_OnVerticalScroll(self, offset, GUI_ROW_HEIGHT, unitscan.refresh_gui)
+	end)
+	stock_scroll:SetScript("OnVerticalScroll", function(self, offset)
+		FauxScrollFrame_OnVerticalScroll(self, offset, GUI_ROW_HEIGHT, unitscan.refresh_gui)
+	end)
+
+	frame:RegisterEvent("PLAYER_TARGET_CHANGED")
+	frame:SetScript("OnEvent", function()
+		unitscan.update_gui_buttons()
+	end)
+	frame:SetScript("OnShow", unitscan.refresh_gui)
+	return frame
+end
+
+function unitscan.toggle_gui()
+	unitscan.create_gui()
+	if unitscan.gui:IsShown() then
+		unitscan.gui:Hide()
+	else
+		unitscan.gui:Show()
+	end
+end
+
+function unitscan.clear_dead_ignore()
+	local count = 0
+	if unitscan_dead then
+		for name in pairs(unitscan_dead) do
+			count = count + 1
+			unitscan_dead[name] = nil
+			known_state[name] = nil
+			recent_deaths[name] = nil
+			found[name] = nil
+		end
+	end
+	if count == 0 then
+		unitscan.print("dead ignore list is empty.")
+	else
+		unitscan.print("dead ignore list cleared (" .. count .. ").")
+	end
+end
+
+
+--------------------------------------------------------------------------------
+-- Slash Commands: /unitscan  /unitscan clear
+--------------------------------------------------------------------------------
+
+SlashCmdList["UNITSCAN"] = function(parameter)
+	local _, _, command = string.find(parameter or "", '^(%S+)%s*(.*)$')
+	if not command then
+		unitscan.toggle_gui()
+	elseif strlower(command) == "clear" then
+		unitscan.clear_dead_ignore()
+	else
+		unitscan.print("Usage: /unitscan   or   /unitscan clear")
 	end
 end
 SLASH_UNITSCAN1 = "/unitscan"
-
-
