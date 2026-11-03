@@ -48,4 +48,4 @@ File-scope `unitscan_dead = unitscan_dead or {}` is the default. Saved variables
 
 ## Commands
 
-`/unitscan` toggles the GUI (User List + Stock List). `/unitscan clear` clears the 30-minute dead ignore. Custom names are added/removed in the User List. Stock rares are Enable/Disable only (red when disabled).
+`/unitscan` toggles the GUI (User List + Stock List). `/unitscan add` adds the current target to the User List (prints `no valid target` if none). `/unitscan remove` removes the current target from the User List (prints `target not tracked` if it is not on that list). `/unitscan noDR` toggles standby in dungeons and raids. `/unitscan clear` clears the 30-minute dead ignore. Custom names are added/removed in the User List. Stock rares are Enable/Disable only (red when disabled).

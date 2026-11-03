@@ -472,25 +472,8 @@ function unitscanLC:FriendCheck(name)
 			if unitscan.ignore_dead_target then
 				unitscan.ignore_dead_target()
 			end
-		elseif event == 'ZONE_CHANGED_NEW_AREA' or 'PLAYER_LOGIN' or 'PLAYER_UPDATE_RESTING' then
-			local loc = GetRealZoneText()
-			local _, instance_type = IsInInstance()
-			is_resting = IsResting()
-			nearby_targets = {}
-
-			if instance_type == "raid" or instance_type == "pvp" then return end
-			if loc == nil then return end
-
-			for name, zone in pairs(rare_spawns) do
-				if not unitscan_ignored[name] then
-					local reaction = UnitReaction("player", name)
-					if not reaction or reaction < 4 then reaction = true else reaction = false end
-					if reaction and (loc == zone or string.match(loc, zone) or zone == "A H") then 
-						table.insert(nearby_targets, name)
-					end
-				end
-			end
-			-- print("nearby_targets:", table.concat(nearby_targets, ", ")) -- Don't delete, it's a useful debug code to print what was added to the rare list scanning.
+		elseif event == 'ZONE_CHANGED_NEW_AREA' or event == 'PLAYER_LOGIN' or event == 'PLAYER_UPDATE_RESTING' then
+			unitscan.refresh_nearby_targets()
 		end
 	end)
 
@@ -500,27 +483,48 @@ function unitscanLC:FriendCheck(name)
 -------------------------------------------------------------------------------------
 
 
+	local instance_standby_announced
+
+	function unitscan.instance_standby()
+		local _, instance_type = IsInInstance()
+		if instance_type == "pvp" or instance_type == "arena" then
+			return true
+		end
+		if unitscan_defaults.NO_DR and (instance_type == "party" or instance_type == "raid") then
+			return true
+		end
+		return false
+	end
+
 	function unitscan.refresh_nearby_targets()
 		-- print("Refreshed nearby rare list.")
-	    local loc = GetRealZoneText()
-	    local _, instance_type = IsInInstance()
-	    is_resting = IsResting()
-	    nearby_targets = {}
-	    
-	    if instance_type == "raid" or instance_type == "pvp" then return end
-	    if loc == nil then return end
-	    
-	    for name, zone in pairs(rare_spawns) do
-	        if not unitscan_ignored[name] then
-	            local reaction = UnitReaction("player", name)
-	            if not reaction or reaction < 4 then reaction = true else reaction = false end
-	            if reaction and (loc == zone or string.match(loc, zone) or zone == "A H") then 
-	                table.insert(nearby_targets, name)
-	            end
-	        end
-	    end
+		local loc = GetRealZoneText()
+		is_resting = IsResting()
+		nearby_targets = {}
 
-	    -- print("nearby_targets:", table.concat(nearby_targets, ", "))
+		if unitscan.instance_standby() then
+			local _, instance_type = IsInInstance()
+			if unitscan_defaults.NO_DR and (instance_type == "party" or instance_type == "raid") then
+				if not instance_standby_announced then
+					unitscan.print("standby (instance)")
+					instance_standby_announced = true
+				end
+			end
+			return
+		end
+		instance_standby_announced = nil
+		if loc == nil then return end
+
+		for name, zone in pairs(rare_spawns) do
+			if not unitscan_ignored[name] then
+				local reaction = UnitReaction("player", name)
+				if not reaction or reaction < 4 then reaction = true else reaction = false end
+				if reaction and (loc == zone or string.match(loc, zone) or zone == "A H") then
+					table.insert(nearby_targets, name)
+				end
+			end
+		end
+		-- print("nearby_targets:", table.concat(nearby_targets, ", "))
 	end
 
 
@@ -561,6 +565,7 @@ function unitscanLC:FriendCheck(name)
 	--===== DB Table for Default Settings =====--
 	unitscan_defaults = {
 		CHECK_INTERVAL = .3,
+		NO_DR = false,
 	}
 
 
@@ -2667,6 +2672,13 @@ end
 
 
 function unitscan.LOAD()
+	unitscan_defaults = unitscan_defaults or {}
+	if unitscan_defaults.CHECK_INTERVAL == nil then
+		unitscan_defaults.CHECK_INTERVAL = .3
+	end
+	if unitscan_defaults.NO_DR == nil then
+		unitscan_defaults.NO_DR = false
+	end
 	unitscan_dead = unitscan_dead or {}
 	local seen_at = GetServerTime and GetServerTime() or time()
 	for name, seen in pairs(unitscan_dead) do
@@ -2966,6 +2978,7 @@ do
 				unitscan.button:Hide()
 			end
 		end
+		if unitscan.instance_standby() then return end
 		if GetTime() - unitscan.last_check >= unitscan_defaults.CHECK_INTERVAL then
 			unitscan.last_check = GetTime()
 			for name in pairs(unitscan_targets) do
@@ -3027,10 +3040,10 @@ function unitscan.toggle_target(name)
 		if not rare_spawns[key] then
 			unitscan_ignored[key] = nil
 		end
-		unitscan.print('- ' .. key)
+		unitscan.print('- ' .. key .. ' removed')
 	elseif key ~= '' then
 		unitscan_targets[key] = true
-		unitscan.print('+ ' .. key)
+		unitscan.print('- ' .. key .. ' added')
 	end
 	if unitscan.refresh_gui then
 		unitscan.refresh_gui()
@@ -3156,6 +3169,13 @@ function unitscan.update_gui_buttons()
 	set_gui_button(frame.toggle, frame.sel ~= nil)
 	set_gui_button(frame.remove, frame.sel and unitscan_targets[frame.sel])
 	set_gui_button(frame.add, can_add_typed or can_add_target)
+	if frame.nodr then
+		if unitscan_defaults.NO_DR then
+			frame.nodr:LockHighlight()
+		else
+			frame.nodr:UnlockHighlight()
+		end
+	end
 end
 
 StaticPopupDialogs["UNITSCAN_CONFIRM_REMOVE"] = {
@@ -3174,6 +3194,23 @@ StaticPopupDialogs["UNITSCAN_CONFIRM_REMOVE"] = {
 	whileDead = 1,
 	hideOnEscape = 1,
 }
+
+local function gui_tooltip(btn, title, detail)
+	btn:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:SetText(title, 1, 0.82, 0)
+		if type(detail) == "function" then
+			detail = detail()
+		end
+		if detail then
+			GameTooltip:AddLine(detail, 1, 1, 1, 1)
+		end
+		GameTooltip:Show()
+	end)
+	btn:SetScript("OnLeave", function()
+		GameTooltip:Hide()
+	end)
+end
 
 local function make_list_button(parent, on_click)
 	local b = CreateFrame("Button", nil, parent)
@@ -3317,6 +3354,7 @@ function unitscan.create_gui()
 	add:SetPoint("LEFT", edit, "RIGHT", 6, 0)
 	add:Disable()
 	frame.add = add
+	gui_tooltip(add, "Add", "Add the typed name, or your current NPC target, to the User List.")
 
 	local remove = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
 	remove:SetWidth(80)
@@ -3325,6 +3363,7 @@ function unitscan.create_gui()
 	remove:SetPoint("LEFT", add, "RIGHT", 6, 0)
 	remove:Disable()
 	frame.remove = remove
+	gui_tooltip(remove, "Remove", "Remove the selected name from the User List.")
 	remove:SetScript("OnClick", function()
 		if not frame.sel or not unitscan_targets[frame.sel] then
 			return
@@ -3342,9 +3381,26 @@ function unitscan.create_gui()
 	toggle:SetPoint("LEFT", remove, "RIGHT", 6, 0)
 	toggle:Disable()
 	frame.toggle = toggle
+	gui_tooltip(toggle, "Enable/Disable", "Skip or resume scanning the selected name. Disabled names are red.")
 	toggle:SetScript("OnClick", function()
 		if not frame.sel then return end
 		unitscan.toggle_ignored(frame.sel)
+	end)
+
+	local nodr = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
+	nodr:SetWidth(50)
+	nodr:SetHeight(22)
+	nodr:SetText("noDR")
+	nodr:SetPoint("LEFT", toggle, "RIGHT", 6, 0)
+	frame.nodr = nodr
+	gui_tooltip(nodr, "noDR", function()
+		if unitscan_defaults.NO_DR then
+			return "On: standby in dungeons and raids."
+		end
+		return "Off: scan in dungeons and raids."
+	end)
+	nodr:SetScript("OnClick", function()
+		unitscan.toggle_no_dr()
 	end)
 
 	local function add_from_edit()
@@ -3354,7 +3410,7 @@ function unitscan.create_gui()
 		end
 		if name == "" or unitscan.name_already_listed(name) then return end
 		unitscan_targets[name] = true
-		unitscan.print("+ " .. name)
+		unitscan.print("- " .. name .. " added")
 		frame.sel = name
 		edit:SetText("")
 		edit:ClearFocus()
@@ -3408,6 +3464,56 @@ function unitscan.toggle_gui()
 	end
 end
 
+function unitscan.add_current_target()
+	local name = unitscan.addable_target_name()
+	if not name then
+		unitscan.print("no valid target")
+		return
+	end
+	if unitscan.name_already_listed(name) then
+		unitscan.print(name .. " is already on a list")
+		return
+	end
+	unitscan_targets[name] = true
+	unitscan.print("- " .. name .. " added")
+	if unitscan.gui then
+		unitscan.gui.sel = name
+	end
+	if unitscan.refresh_gui then
+		unitscan.refresh_gui()
+	end
+end
+
+function unitscan.remove_current_target()
+	local raw = UnitName("target")
+	if not raw or raw == "" then
+		unitscan.print("no valid target")
+		return
+	end
+	local name = strupper(raw)
+	if not unitscan_targets[name] then
+		unitscan.print("target not tracked")
+		return
+	end
+	if unitscan.gui and unitscan.gui.sel == name then
+		unitscan.gui.sel = nil
+	end
+	unitscan.toggle_target(name)
+end
+
+function unitscan.toggle_no_dr()
+	unitscan_defaults.NO_DR = not unitscan_defaults.NO_DR
+	if unitscan_defaults.NO_DR then
+		unitscan.print("noDR on - standby in dungeons and raids")
+	else
+		unitscan.print("noDR off - scan in dungeons and raids")
+	end
+	unitscan.refresh_nearby_targets()
+	if unitscan.update_gui_buttons then
+		unitscan.update_gui_buttons()
+	end
+end
+
 function unitscan.clear_dead_ignore()
 	local count = 0
 	if unitscan_dead then
@@ -3428,17 +3534,23 @@ end
 
 
 --------------------------------------------------------------------------------
--- Slash Commands: /unitscan  /unitscan clear
+-- Slash Commands: /unitscan  /unitscan add  /unitscan clear
 --------------------------------------------------------------------------------
 
 SlashCmdList["UNITSCAN"] = function(parameter)
 	local _, _, command = string.find(parameter or "", '^(%S+)%s*(.*)$')
 	if not command then
 		unitscan.toggle_gui()
+	elseif strlower(command) == "add" then
+		unitscan.add_current_target()
+	elseif strlower(command) == "remove" then
+		unitscan.remove_current_target()
+	elseif strlower(command) == "nodr" then
+		unitscan.toggle_no_dr()
 	elseif strlower(command) == "clear" then
 		unitscan.clear_dead_ignore()
 	else
-		unitscan.print("Usage: /unitscan   or   /unitscan clear")
+		unitscan.print("Usage: /unitscan   or   /unitscan add   or   /unitscan remove   or   /unitscan noDR   or   /unitscan clear")
 	end
 end
 SLASH_UNITSCAN1 = "/unitscan"

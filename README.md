@@ -17,6 +17,9 @@ Then `/reload`.
 | Command | Effect |
 | --- | --- |
 | `/unitscan` | Toggle the GUI (User List + Stock List) |
+| `/unitscan add` | Add the current target to the User List |
+| `/unitscan remove` | Remove the current target from the User List |
+| `/unitscan noDR` | Toggle standby in dungeons and raids |
 | `/unitscan clear` | Clear 30-minute dead ignore so those rares scan again |
 
 ## Alerts
